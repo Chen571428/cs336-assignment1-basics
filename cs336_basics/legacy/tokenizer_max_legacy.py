@@ -52,11 +52,12 @@ def train_bpe(
 
     vocab = dict(enumerate(t.encode() for t in  special_tokens))
     vocab.update({x + len(special_tokens) : bytes([x]) for x in range(256)})
+    # print(vocab)
+
     merges = []
 
     pretokens_freqs = pretokenize(input_path= input_path, special_tokens= special_tokens)
-
-    byte_pairs : list[Optional[tuple[tuple[bytes, bytes], int]]] = []
+    byte_pairs : list[tuple[tuple[bytes, bytes], int]] = []
     byte_pair_counts : dict[tuple[bytes, bytes], int] = defaultdict(int)
 
 
@@ -71,30 +72,15 @@ def train_bpe(
 
         byte_pairs.append(None)
     
-    class Byte_Pair_Counts_Obj:
-        """
-        Wrap the object and rewrite the less then method so that heapq make sense
-        """
-        def __init__(self, val):
-            self.val = val
-        
-        def __lt__(self, other: Self):
-            return self.val > other.val
-        
-        def __repr__(self):
-            return str(self.val)
-    
-    byte_pair_heap = [Byte_Pair_Counts_Obj((fq, bp)) for bp, fq in byte_pair_counts.items()]
-    heapq.heapify(byte_pair_heap)
-    # Use Heap to maintain the Most Common Bytes Pair
-    
     bp_indices = defaultdict(list)
+    deleted_bp_indicies = defaultdict(set)
     deleted = set()
 
     for index, item in enumerate(byte_pairs):
         if item is None:
             continue
         bp_indices[item[0]].append(index)
+
 
     # Save the occurences of byte_pairs for incrementally update
 
@@ -112,14 +98,9 @@ def train_bpe(
 
             # get the most common byte pair
             new_index = len(vocab)
-            most_common_bp: Optional[tuple[bytes, bytes]] = None
-            while len(byte_pair_heap):
-                most_fq, most_common_bp = heapq.heappop(byte_pair_heap).val
-                if byte_pair_counts[most_common_bp] == most_fq:
-                    break
-            if most_common_bp is None:
-                break
-                # This is Unreachable
+            most_common_bp = max(byte_pair_counts, key=lambda x: (byte_pair_counts[x], x))
+
+            # update vocab
 
             # update vocab
             merges.append(most_common_bp)
@@ -128,10 +109,8 @@ def train_bpe(
 
             # incrementally update byte_pair_counts
             
-            new_byte_pair_counts = defaultdict(int)
-            # Mark the updated byte pair counts for heap updateing
             for occ_index in bp_indices[most_common_bp]:
-                if occ_index in deleted :
+                if occ_index in deleted or occ_index in deleted_bp_indicies[most_common_bp]:
                     continue
                 if byte_pairs[occ_index][0] != most_common_bp:
                     continue
@@ -145,13 +124,11 @@ def train_bpe(
                         bp, freq = byte_pairs[prev_index]
                         nbp = ((byte_pairs[prev_index][0][0], new_byte), freq)
                         bp_indices[nbp[0]].append(prev_index)
+                        deleted_bp_indicies[bp].add(prev_index)
 
                         byte_pair_counts[bp] -= freq
                         byte_pairs[prev_index] = nbp
                         byte_pair_counts[nbp[0]] += freq
-
-                        new_byte_pair_counts[bp] = byte_pair_counts[bp]
-                        new_byte_pair_counts[nbp[0]] += freq
                 
                 if occ_index < len(byte_pairs) - 1:
                     next_index = occ_index + 1
@@ -163,24 +140,15 @@ def train_bpe(
                         bp, freq = byte_pairs[next_index]
                         nbp = ((new_byte, byte_pairs[next_index][0][1]), freq)
                         bp_indices[nbp[0]].append(next_index)
+                        deleted_bp_indicies[bp].add(next_index)
 
                         byte_pair_counts[bp] -= freq
                         byte_pairs[next_index] = nbp
                         byte_pair_counts[nbp[0]] += freq
 
-                        new_byte_pair_counts[bp] = byte_pair_counts[bp]
-                        new_byte_pair_counts[nbp[0]] += freq
-
                 deleted.add(occ_index)
                 byte_pair_counts[most_common_bp] -= byte_pairs[occ_index][1]
-                new_byte_pair_counts[most_common_bp] = byte_pair_counts[most_common_bp]
-
             
-            # update the heap
-            for bp, freq in new_byte_pair_counts.items():
-                if freq > 0:
-                    heapq.heappush(byte_pair_heap, Byte_Pair_Counts_Obj((freq, bp)))
-    
     merge_ed_time = time.perf_counter()
     logger.info(f"Merge Completed, duration is {merge_ed_time - merge_st_time: .6f} sec.")
 
@@ -260,10 +228,10 @@ if __name__ == "__main__":
     # vocab, merges = train_bpe(
     #     input_path="data/TinyStoriesV2-GPT4-train.txt"
     # )
-    vocab, merges = train_bpe(
-        vocab_size=32000,
-        input_path="data/owt_train.txt",
-    )
+    # vocab, merges = train_bpe(
+    #     vocab_size=32000,
+    #     input_path="data/owt_train.txt",
+    # )
     #
     # with open(f"vocab_{str(input_path)[5:]}.json", "w") as f:
     #     json.dump(vocab, f, ensure_ascii=False, default=lambda x: x.decode('latin-1') if isinstance(x, bytes) else x)
@@ -271,8 +239,8 @@ if __name__ == "__main__":
     # with open(f"merges_{str(input_path)[5:]}.json", "w") as f:
     #     json.dump(merges, f, ensure_ascii=False, default=lambda x: x.decode('latin-1') if isinstance(x, bytes) else x)
 
-    # vocab, merges = train_bpe(
-    #     input_path="data/TinyStoriesV2-GPT4-train.txt",
-    # )
+    vocab, merges = train_bpe(
+        input_path="data/TinyStoriesV2-GPT4-train.txt",
+    )
     # print(vocab)
     # print(merges)

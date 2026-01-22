@@ -7,7 +7,17 @@ import functools
 import regex as re
 import tqdm
 from tqdm import tqdm
+import time
+from cs336_basics.utils import get_logger, timer
+from rich.progress import track
 
+logger = get_logger(__name__)
+
+BYTES_LOOKUP = [bytes([i]) for i in range(256)]
+PRETOKENIZE_PAT =  r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+PATTERN = re.compile(PRETOKENIZE_PAT)
+
+@timer
 def find_chunk_boundaries(
     file: BinaryIO,
     desired_num_chunks: int,
@@ -60,13 +70,10 @@ def pretokenize_single_text(
     """
     Pretokenize the single Special_tokens-removed text
     """
-    
-    PAT =  r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-    
-    raw_bytes_gen = (m.group().encode() for m in re.finditer(PAT, text))
+    raw_bytes_gen = (m.group().encode() for m in re.finditer(PATTERN, text))
 
     pretoken_gen = (
-        tuple(b[i:i+1] for i in range(len(b))) 
+        tuple(BYTES_LOOKUP[i] for i in b) # using Lookup table to optimize
         for b in raw_bytes_gen
     )
 
@@ -96,6 +103,7 @@ def pre_tokenize_single_chunk(
 
     return pretoken_freq
 
+@timer
 def pretokenize(
     input_path : str | os.PathLike = "data/TinyStoriesV2-GPT4-valid.txt",
     special_tokens : list[str] = ["<|endoftext|>"],
@@ -107,7 +115,9 @@ def pretokenize(
 
     pretokens_freq = Counter()
 
-    with multiprocessing.Pool(processes=num_processes) as pool:
+    with multiprocessing.Pool(processes= num_processes) as pool:
+
+        logger.info(f"Starting Pretokenization with {num_processes} processes.")
         results = pool.imap_unordered(functools.partial(
                                 pre_tokenize_single_chunk,
                                 special_tokens= special_tokens,
@@ -115,12 +125,18 @@ def pretokenize(
                             ),
                             zip(boundaries[:-1], boundaries[1:]))
         # map pretoken task to each process
+        logger.info("Multiprocessing completed, Merging results.")
+        rmerge_st_time = time.perf_counter()
 
-        for partial_res in results:
+        for partial_res in track(results, description="[bold blue]Merging Pretokenization results[/]"):
             pretokens_freq.update(partial_res)
+            
+        rmerge_ed_time = time.perf_counter()
+
+        logger.info(f"Results Merging Duration is {rmerge_ed_time - rmerge_st_time : .6f}")
 
         return pretokens_freq
-            
+    
 if __name__ == "__main__":
     x = pretokenize()
     print(dict(x))

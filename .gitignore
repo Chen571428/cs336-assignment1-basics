@@ -164,3 +164,13 @@ cython_debug/
 data/**
 .vscode/settings.json
 test_results.xml
+get_longget_vocab_from_json.py
+merges_owt_train.txt.json
+merges_TinyStoriesV2-GPT4-train.txt.json
+merges_TinyStoriesV2-GPT4-valid.txt.json
+profile_owt.json
+scalene-profile.html
+scalene-profile.json
+vocab_owt_train.txt.json
+vocab_TinyStoriesV2-GPT4-train.txt.json
+vocab_TinyStoriesV2-GPT4-valid.txt.json
