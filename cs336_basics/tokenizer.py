@@ -47,8 +47,7 @@ def train_bpe(
                 Merges are ordered by order of creation.
     """
     logger.info(f"Starting BPE Training, dataset is {input_path}")
-    logger.info(f"Started Preprocess")
-    preprocess_st_time = time.perf_counter()
+    
 
     vocab = dict(enumerate(t.encode() for t in  special_tokens))
     vocab.update({x + len(special_tokens) : bytes([x]) for x in range(256)})
@@ -59,15 +58,20 @@ def train_bpe(
     byte_pairs : list[Optional[tuple[tuple[bytes, bytes], int]]] = []
     byte_pair_counts : dict[tuple[bytes, bytes], int] = defaultdict(int)
 
+    logger.info(f"Finished Pretokenization. Started Preprocessing.")
+
+    preprocess_st_time = time.perf_counter()
+
+    bp_indices = defaultdict(list)
 
     for pretoken_bytes, freq in pretokens_freqs.items():
-        for i in range(len(pretoken_bytes) - 1):
-            byte_pair = (pretoken_bytes[i], pretoken_bytes[i+1])
-            if not byte_pair_counts[byte_pair]:
-                byte_pair_counts[byte_pair] = freq
-            else:
-                byte_pair_counts[byte_pair] += freq
+
+        start_idx = len(byte_pairs)
+
+        for i, byte_pair in enumerate(zip(pretoken_bytes, pretoken_bytes[1:])):
+            byte_pair_counts[byte_pair] += freq
             byte_pairs.append((byte_pair, freq))
+            bp_indices[byte_pair].append(i + start_idx)
 
         byte_pairs.append(None)
     
@@ -75,7 +79,9 @@ def train_bpe(
         """
         Wrap the object and rewrite the less then method so that heapq make sense
         """
-        def __init__(self, val):
+        __slots__ = ('val',)
+
+        def __init__(self, val: tuple[int, tuple[bytes, bytes]]):
             self.val = val
         
         def __lt__(self, other: Self):
@@ -88,15 +94,8 @@ def train_bpe(
     heapq.heapify(byte_pair_heap)
     # Use Heap to maintain the Most Common Bytes Pair
     
-    bp_indices = defaultdict(list)
+    
     deleted = set()
-
-    for index, item in enumerate(byte_pairs):
-        if item is None:
-            continue
-        bp_indices[item[0]].append(index)
-
-    # Save the occurences of byte_pairs for incrementally update
 
     preprocess_ed_time = time.perf_counter()
 

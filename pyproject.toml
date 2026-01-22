@@ -21,10 +21,13 @@ dependencies = [
     "ty>=0.0.1a16",
     "rich>=14.2.0",
     "pytest-json-report>=1.5.0",
+    "cppyy>=3.5.0",
+    "cpycppyy>=1.13.0",
+    "cppyy-backend>=1.15.3",
 ]
 
 [build-system]
-requires = ["uv_build>=0.8.3,<0.9.0"]
+requires = ["uv_build>=0.8.3,<0.9.0", "wheel", "cppyy"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
