@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 
 BYTES_LOOKUP = [bytes([i]) for i in range(256)]
 PRETOKENIZE_PAT =  r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-PATTERN = re.compile(PRETOKENIZE_PAT)
+PREPATTERN = re.compile(PRETOKENIZE_PAT)
 
 @timer
 def find_chunk_boundaries(
@@ -70,7 +70,7 @@ def pretokenize_single_text(
     """
     Pretokenize the single Special_tokens-removed text
     """
-    raw_bytes_gen = (m.group().encode() for m in re.finditer(PATTERN, text))
+    raw_bytes_gen = (m.group().encode() for m in re.finditer(PREPATTERN, text))
 
     pretoken_gen = (
         tuple(BYTES_LOOKUP[i] for i in b) # using Lookup table to optimize

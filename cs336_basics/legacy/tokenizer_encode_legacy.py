@@ -209,11 +209,6 @@ class Tokenizer:
         self.invert_vocab = {value : key for key, value in vocab.items()}
         self.merges = merges
         self.special_tokens = special_tokens
-        self.cache : dict[tuple[bytes, ...], list[int]] = {}
-        # implement cache to optimize
-        self.merge_rank : dict[tuple[bytes, bytes], int] = dict(zip(merges, range(len(merges))))
-        # implement rank to optimize
-
         if special_tokens is not None:
             self.special_tokens = sorted(special_tokens,reverse=True, key=lambda x : len(x))
             self.split_pattern = re.compile(f"({"|".join(re.escape(t) for t in self.special_tokens)})")
@@ -244,43 +239,63 @@ class Tokenizer:
 
         return cls(vocab, merges, special_tokens)
     
-    def merge(self, token_bytes: tuple[bytes, ...]) -> list[int]:
-        if token_bytes in self.cache:
-            return self.cache[token_bytes]
-        
-        word = list(token_bytes)
-        while len(word) > 1:
-            min_rank = float('inf')
-            min_pair_i = None
-
-            for i in range(len(word) - 1):
-                pair = (word[i], word[i+1])
-                if self.merge_rank.get(pair, float("inf")) < min_rank:
-                    min_rank = self.merge_rank[pair]
-                    min_pair_i = i
-
-            if min_pair_i is not None and min_rank != float("inf"):
-                word[min_pair_i] = word[min_pair_i] + word[min_pair_i + 1]
-                del word[min_pair_i + 1]
-            else:
-                break
-        
-        ids = [self.invert_vocab[token] for token in word]
-        self.cache[token_bytes] = ids
-
-        return ids
-
-
     def encode_single_text(self, text: str) -> list[int]:
         raw_bytes_gen = (m.group().encode() for m in re.finditer(PREPATTERN, text))
         pretoken_gen = (
-                tuple(BYTES_LOOKUP[i] for i in b)
+                [BYTES_LOOKUP[i] for i in b]
                 for b in raw_bytes_gen
             )
         encoded_str = []
-        for t in pretoken_gen:
-            encoded_str.extend(self.merge(t))
-       
+        byte_pairs = []
+        bytes_list : list[Optional[bytes]] = []
+        bp_indices : dict[tuple[bytes, ...], list]= defaultdict(list)
+        deleted = set()
+        
+        for pretoken_bytes in pretoken_gen:
+            start_idx = len(byte_pairs)
+            for i , byte_pair in enumerate(zip_longest(pretoken_bytes, pretoken_bytes[1:])):
+                byte_pairs.append(byte_pair)
+                bp_indices[byte_pair].append(i + start_idx)
+                bytes_list.append(byte_pair[0])
+
+            byte_pairs.append(None)
+            bytes_list.append(None)
+
+        for merge in self.merges:
+            for occ_index in bp_indices[merge]:
+                merged_token_bytes = b"".join(merge)
+                if occ_index in deleted:
+                    continue
+                if byte_pairs[occ_index] != merge:
+                    continue
+                if occ_index > 0:
+                    prev_index = occ_index - 1
+
+                    while prev_index in deleted:
+                        prev_index -= 1
+
+                    if prev_index >= 0 and byte_pairs[prev_index] != None:
+                        nbp = (byte_pairs[prev_index][0], merged_token_bytes)
+                        bp_indices[nbp].append(prev_index)
+
+                        byte_pairs[prev_index] = nbp
+                
+                if occ_index < len(byte_pairs) - 1:
+                    next_index = occ_index + 1
+
+                    while next_index in deleted:
+                        next_index += 1
+                    bytes_list[next_index] = merged_token_bytes
+                    if next_index < len(byte_pairs) and byte_pairs[next_index] is not None:
+                        nbp = (merged_token_bytes, byte_pairs[next_index][1])
+                        bp_indices[nbp].append(next_index)
+
+                        byte_pairs[next_index] = nbp
+
+                deleted.add(occ_index)
+        
+        encoded_str = [self.invert_vocab[token_id] for i, token_id in enumerate(bytes_list) 
+                       if (token_id is not None and not i in deleted)]
         return encoded_str
 
     def encode_single_process(self, chunk : list[str]) -> list[int]:
@@ -295,10 +310,10 @@ class Tokenizer:
 
         return encoded_str
 
-    def encode(self, text: str, num_process: int = (os.cpu_count() or 2) - 1) -> list[int]:
+    def encode(self, text: str, num_process: int = 1) -> list[int]:
         if self.special_tokens is not None:
             results = re.split(self.split_pattern, text)
-            if num_process != 1 and len(text) < 1048576:
+            if num_process != 1:
                 chunksize = (len(results) - 1) // num_process
                 if chunksize % 2 != 0:
                     chunksize  += 1
@@ -324,33 +339,29 @@ class Tokenizer:
             return self.encode_single_text(text)
 
     def _encode_batch_worker(self, chunk: list[str]):
-        return [self.encode(text,num_process= 1) for text in chunk]
+        return [self.encode(text) for text in chunk]
     
-    def __parrellel_encode(self, chunk: list[str], pool_size: int = (os.cpu_count() or 2) - 1)-> Iterator[int]:
-        if pool_size == 1:
-            for t in chunk:
-                yield from self.encode(t)
-        else:
-            batch_size = (len(chunk) + pool_size - 1) // pool_size
-            mini_batches = [chunk[i:i + batch_size] for i in range(0, len(chunk), batch_size)]
-            with multiprocessing.Pool(processes=pool_size) as pool:
-                results_of_lists = pool.map(self._encode_batch_worker, mini_batches)
+    def __parrellel_encode(self, chunk: list[str], pool_size: int = (os.cpu_count() or 2) - 1) -> Iterator[int]:
+        batch_size = (len(chunk) + pool_size - 1) // pool_size
+        mini_batches = [chunk[i:i + batch_size] for i in range(0, len(chunk), batch_size)]
+        with multiprocessing.Pool(processes=pool_size) as pool:
+            results_of_lists = pool.map(self._encode_batch_worker, mini_batches)
 
-            for worker_result in results_of_lists:
-                for ids in worker_result:
-                    yield from ids
+        for worker_result in results_of_lists:
+            for ids in worker_result:
+                yield from ids
 
-    def encode_iterable(self, iterable: Iterable[str], chunk_size : int = 10240, pool_size: int = (os.cpu_count() or 2) - 1) -> Iterator[int]:
+    def encode_iterable(self, iterable: Iterable[str], chunk_size : int = 51200) -> Iterator[int]:
         """Iterable Encoder,processing encoding by chunks for memory efficient"""
         chunk = []
         for item in iterable:
             chunk.append(item)
             if len(chunk) > chunk_size:
-                yield from self.__parrellel_encode(chunk, pool_size)
+                yield from self.__parrellel_encode(chunk)
                 chunk = []
         
         if chunk:
-            yield from self.__parrellel_encode(chunk, pool_size)
+            yield from self.__parrellel_encode(chunk)
     
     def decode(self, ids: list[int]) -> str:
         """Decode the list of tokens into string"""
@@ -365,21 +376,11 @@ if __name__ == "__main__":
     from tests.test_tokenizer import get_tokenizer_from_vocab_merges_path, _encode_iterable
     tokenizer = get_tokenizer_from_vocab_merges_path(str(VOCAB_PATH), str(MERGES_PATH))
     
-    # print(tokenizer.encode("Hello, i'm so happy."))
-
     @timer
-    def foo():
-        with open("/home/cjj/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-valid.txt") as f:
+    def run():
+        with open(FIXTURES_PATH / "tinystories_sample_5M.txt") as f:
             ids = []
-            for id in track(tokenizer.encode_iterable(f, chunk_size = 214748364700000)):
-                ids.append(id)
-    @timer
-    def bar():
-        with open("/home/cjj/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-valid.txt") as f:
-            ids = []
-            for id in track(tokenizer.encode_iterable(f, chunk_size = 214748364700000, pool_size = 1)):
-                ids.append(id)
-
-    foo()
-    bar()
+            for _id in track(_encode_iterable(tokenizer, f)):
+                ids.append(_id)
+    run()
     
