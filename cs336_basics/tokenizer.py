@@ -1,19 +1,26 @@
 import os
+import mmap
+
 import json
-from cs336_basics.pretokenization import pretokenize, PREPATTERN, BYTES_LOOKUP
-from collections import Counter, defaultdict
-from rich.progress import track
-from typing import Optional, Self, Iterable, Iterator, Sequence, BinaryIO
 import heapq
-from cs336_basics.utils import get_logger, timer, ProgressBar, find_chunk_boundaries
-from cs336_basics.rust_utils import RustBPE
 import time
 import regex as re
-from itertools import zip_longest
+
 import multiprocessing
 import multiprocessing.pool
-import functools
+
+from itertools import zip_longest
+
 import numpy as np
+import numpy.typing as npt
+
+from collections import defaultdict
+
+from typing import Optional, Self, Iterable, Iterator, Sequence
+
+from cs336_basics.pretokenization import pretokenize, PREPATTERN, BYTES_LOOKUP
+from cs336_basics.utils import get_logger, timer, ProgressBar, find_chunk_boundaries
+from cs336_basics.rust_utils import RustBPE
 
 logger = get_logger(__name__)
 
@@ -185,14 +192,16 @@ def train_bpe(
 
 
 # --------------------------------------------
+
 _global_tokenizer: Optional["Tokenizer"] = None
+""" Globalize the Tokenizer Instance to avoid serializing effort """
 
 def _encode_worker_wrapper(args):
     pos, input_path = args
     if _global_tokenizer:
         return _global_tokenizer._encode_inside_file(pos, input_path)
     else:
-        assert _global_tokenizer is None , "tokenizer not initliazed"
+        assert _global_tokenizer is None , "Global Tokenizer not initliazed"
 
 
 class Tokenizer:
@@ -204,7 +213,8 @@ class Tokenizer:
             vocab: dict[int, bytes],
             merges: list[tuple[bytes, bytes]],
             special_tokens: list[str] | None = None,
-            use_rust: bool | None = None
+            use_rust: bool | None = True,
+            dtype: npt.DTypeLike = np.uint16
     ):
         """Given a vocabulary, a list of merges, and a list of special tokens,
         return a BPE tokenizer that uses the provided vocab, merges, and special tokens.
@@ -225,15 +235,17 @@ class Tokenizer:
         self.invert_vocab = {value : key for key, value in vocab.items()}
         self.merges = merges
         self.special_tokens = special_tokens
+
         self.cache : dict[tuple[bytes, ...], list[int]] = {}
-        # implement cache to optimize
         self.merge_rank : dict[tuple[bytes, bytes], int] = dict(zip(merges, range(len(merges))))
+
         self.use_rust = use_rust
         self.merge_rk_nid : dict[tuple[int, int], tuple[int, int]] = {(self.invert_vocab[b1], self.invert_vocab[b2]) : (rk, self.invert_vocab[b1 + b2]) for (b1, b2), rk in self.merge_rank.items()}
-        self.rust_bpe_engine = RustBPE(self.merge_rk_nid)
-        # implement rank to optimize
+
+        self.dtype = dtype
 
         if special_tokens is not None:
+            # Initailze special_tokens to vocab and pre-complie the splitting regex pattern
             self.special_tokens = sorted(special_tokens,reverse=True, key=lambda x : len(x))
             self.split_pattern = re.compile(f"({"|".join(re.escape(t) for t in self.special_tokens)})")
             
@@ -243,15 +255,30 @@ class Tokenizer:
                     new_id = len(self.vocab)
                     self.vocab[new_id] = t_bytes
                     self.invert_vocab[t_bytes] = new_id
-    
+
+        self.rust_bpe_engine = RustBPE(self.merge_rk_nid,[self.invert_vocab[bytes([x])] for x in range(256)])
+
     @classmethod
     def from_files(
             cls,
             vocab_filepath: str,
             merges_filepath: str,
             special_tokens: list[str] | None = None,
-            use_rust: bool | None = None
+            use_rust: bool | None = None,
+            dtype: npt.DTypeLike = np.uint16
     ) -> Self:
+        """Initalize a Tokenizer from Pre-Generated Vocab and Merges Json files.
+
+        Args:
+            vocab_filepath (str): Path to the vocab json file
+            merges_filepath (str): Path to the Merges json file
+            special_tokens (list[str] | None, optional): User-defined Special-tokens. Defaults to None.
+            use_rust (bool | None, optional): Whether to use RustBPE engine all the time or only for the over-long pre-tokens. Defaults to None.
+            dtype (npt.DTypeLike): Defaults to np.uint16
+
+        Returns:
+            Self: A Tokenizer
+        """
         
         vocab : dict[int, bytes] = {} 
         merges : list[tuple[bytes, bytes]]
@@ -265,7 +292,17 @@ class Tokenizer:
         return cls(vocab, merges, special_tokens, use_rust)
     
     def merge(self, token_bytes: tuple[bytes, ...]) -> list[int]:
+        """BPE Merge Algorithm. Implemented in Python with Simple O(N^2) loop.
+
+        Args:
+            token_bytes (tuple[bytes, ...]): Original tuple of bytes of one pre-token
+
+        Returns:
+            list[int]: Tokens represent the Pre-token
+        """
         if self.use_rust:
+            # If use rust BPE engine, just cast the bytes 1:1 to un-merged token ids and deliver to rust.
+            # Satisfying the Vec<Vec<u8>> interface. 
             inital_ids = [self.invert_vocab[b] for b in token_bytes]
             return self.rust_bpe_engine.merge(inital_ids)
         else:
@@ -273,7 +310,9 @@ class Tokenizer:
                 return self.cache[token_bytes]
             
             if len(token_bytes) > 2048:
-                logger.warning(f"tk bytes is too long: {len(token_bytes)}, deliver to rust")
+                # Though current implementation of RustBPE is relatively slow, 
+                # for A Over-long token it's still mush faster than Python O(N^2) Loop
+                logger.warning(f"Token bytes is too long: {len(token_bytes)}, deliver to rust")
                 return self.rust_bpe_engine.merge([self.invert_vocab[b] for b in token_bytes])
 
 
@@ -299,33 +338,46 @@ class Tokenizer:
             return ids
         
 
-    def encode_single_text(self, text: str, pytestflag : bool = True, num_processes: int = 1) -> list[int]:
-        raw_bytes_gen = (m.group().encode() for m in re.finditer(PREPATTERN, text))
-        pretoken_gen = (
-                tuple(BYTES_LOOKUP[i] for i in b)
-                for b in raw_bytes_gen
-            )
-        if pytestflag:
-            pretoken_gen = list(pretoken_gen)
+    def encode_single_text(
+            self,
+            text: str,
+        ) -> list[int]:
+        """Encode single prue text which has no special tokens.
 
-        encoded_str = []
-        
+        Args:
+            text (str): Text without special tokens to be encoding.
+
+        Returns:
+            list[int]: Token ids represent the text.
+        """
         if self.use_rust:
-            batch_initial_ids = [
-                [self.invert_vocab[b] for b in t] 
-                for t in pretoken_gen
-            ]
-            
-            merged_batch = self.rust_bpe_engine.merge_batch(batch_initial_ids)
-            
-            for ids in merged_batch:
-                encoded_str.extend(ids)
+            return self.rust_bpe_engine.encode_single_text(text)
         else:
+            raw_bytes_gen = (m.group().encode() for m in re.finditer(PREPATTERN, text))
+            
+            pretoken_gen = [
+                    tuple(BYTES_LOOKUP[i] for i in b)
+                    for b in raw_bytes_gen
+            ]
+
+            encoded_str = []
+            
             for t in pretoken_gen:
                 encoded_str.extend(self.merge(t))
-        return encoded_str
+
+            return encoded_str
     
     def encode(self, text: str) -> list[int]:
+        """Encode the text (with special tokens).
+        This function does the splitting by special-tokens,
+        and deliver the text without special-tokens to `self.encode_single_text()`
+
+        Args:
+            text (str): Text (with special tokens)
+
+        Returns:
+            list[int]: Tokens
+        """
         if self.special_tokens is not None:
             results = []
             try:
@@ -343,14 +395,39 @@ class Tokenizer:
             return self.encode_single_text(text)
 
 
-    def _encode_batch_worker(self, chunk: Sequence[str]) -> list[int]:
+    def _encode_batch_worker(
+            self, 
+            chunk: Sequence[str]
+        ) -> list[int]:
+        """Batch encode worker for Encode Iterable
+
+        Args:
+            chunk (Sequence[str]): 
+
+        Returns:
+            list[int]: 
+        """
         res = []
         for text in chunk:
             res.extend(self.encode(text))
         return res
     
-    def encode_iterable(self, iterable: Iterable[str], pool: multiprocessing.pool.Pool | None = None, chunk_size : int = 8192) -> Iterator[int]:
-        """Iterable Encoder,processing encoding by chunks for memory efficient"""
+    def encode_iterable(
+            self, 
+            iterable: Iterable[str],
+            pool: multiprocessing.pool.Pool | None = None, 
+            chunk_size : int = 8192
+        ) -> Iterator[int]:
+        """Iterable Encoder, For memory usage control
+
+        Args:
+            iterable (Iterable[str]): Iterable Strings
+            pool (multiprocessing.pool.Pool | None, optional): Providing a parrellel pool. Defaults to None.
+            chunk_size (int, optional): Defaults to 8192.
+
+        Yields:
+            Iterator[int]: Streaming producer of tokens
+        """
         def batch_generator():
             batch = []
             for line in iterable:
@@ -371,18 +448,44 @@ class Tokenizer:
             self,
             pos : tuple[int, int],
             input_path : str | os.PathLike,
-    ) -> tuple[np.ndarray, int]:
+    ) -> tuple[npt.NDArray, int]:
+        """Encode a part inside a file.
+
+        Args:
+            pos (tuple[int, int]): `(start, end)` Range to be read and encoding of the file.
+            input_path (str | os.PathLike): Path of the file to be encoding.
+
+        Returns:
+            tuple[npt.NDArray, int]: 
+                Token ids stored as np.array and Size of the chunk (bytes)
+        """
+        start, end = pos
+        chunk_len = end - start
+
         with open(input_path, "rb") as f:
-            start, end = pos
+            with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                chunk = mm[start:end].decode("utf-8", errors="replace")
+                ids_list = self.encode(chunk)
 
-            f.seek(start)
-            chunk = f.read(end - start).decode("utf-8", errors="ignore")
-            ids_list = self.encode(chunk)
-            chunk_len = sum(len(self.vocab[i]) for i in ids_list)
-            
-            return np.array(ids_list, dtype=np.uint16), chunk_len
+        return np.array(ids_list, dtype=self.dtype), chunk_len
 
-    def encode_from_file(self, file_path: str, num_processes: int = (os.cpu_count() or 2) - 1, chunk_size: int = 16384) -> Iterator[tuple[np.ndarray, int]]:
+    def encode_file_parrellel(
+            self,
+            file_path: str,
+            num_processes: int = (os.cpu_count() or 2) - 1,
+            chunk_size: int = 50 * 1024 * 1024 
+        ) -> Iterator[tuple[npt.NDArray, int]]:
+        """Parrellely encode a file.
+
+        Args:
+            file_path (str): 
+            num_processes (int, optional):  Defaults to (os.cpu_count() or 2)-1.
+            chunk_size (int, optional): Defaults to 32 * 1024 * 1024 bytes (32MiB).
+
+        Yields:
+            Iterator[tuple[npt.NDArray, int]]: yield the return value of `_encode_inside_file()`
+        """
+
         boundaries =[]
         with open(file_path, "rb") as f:
             boundaries = find_chunk_boundaries(f, chunk_size = chunk_size)
@@ -401,71 +504,105 @@ class Tokenizer:
                     batch_ids, chunk_len = res
                     yield batch_ids, chunk_len
 
+    @timer
+    def encode_file_to(self,
+                        input_path: str,
+                        output_path: str,
+                        num_processes: int = 8, 
+                        chunk_size: int = 32 * 1024 * 1024
+        ) -> None:
+        """ Encode a file to .npy
+
+        Args:
+            input_path (str): 
+            output_path (str): 
+            num_processes (int, optional):  Defaults to 8.
+            chunk_size (int, optional): Defaults to 32*1024*1024.
+        """
+
+        temp_bin_path = f"{output_path}.temp.bin"
+
+        # Create a empty temp file.
+        with open(temp_bin_path, "wb") as f:
+            pass
+
+        encode_start_time = time.perf_counter()
+
+        with ProgressBar() as pbar:
+
+            task = pbar.add_task(
+                description=f"Encoding `{input_path}`",
+                total= os.path.getsize(input_path)
+            )
+
+            sample_sum_bytes = []
+            total_tks = 0
+            
+            avg_compression_ratio : float | None = None
+            sample_token_nums = 0
+            update_interval = 1
+            accu_chunks = 0
+            last = 0
+            with open(temp_bin_path, "ab") as f_out:
+                for chunk_array, chunk_len in self.encode_file_parrellel(
+                            file_path= input_path,
+                            num_processes= num_processes, 
+                            chunk_size=  chunk_size
+                    ):
+
+                    f_out.write(chunk_array.tobytes())
+
+                    accu_chunks += 1
+                    total_tks += len(chunk_array)
+
+                    if accu_chunks == 1:
+                        logger.info(f"First chunk file processed. Duration is {time.perf_counter() - encode_start_time: .6f}")
+                        encode_start_time = time.perf_counter()
+
+                    if accu_chunks % update_interval == 0:
+                        sample_sum_bytes.append(chunk_len)
+                        sample_token_nums += len(chunk_array)
+                        avg_compression_ratio = sum(sample_sum_bytes) / sample_token_nums
+                        total_estimate_bytes = avg_compression_ratio * total_tks
+
+                        elapsed_time = time.perf_counter() - encode_start_time
+                        if elapsed_time > 0:
+                            throughput = (total_estimate_bytes / 1048576) / elapsed_time  # MB/s
+
+                            pbar.advance(task, total_estimate_bytes - last)
+                            last = total_estimate_bytes
+
+                            pbar.update(task, description=f"Encoding... [green]{throughput:.4f} MB/s[/green] [red]Compression Ratio {avg_compression_ratio:.4f}[/red]")
+
+        logger.info(f"Finished. Total duration: {time.perf_counter() - encode_start_time:.6f} s, Total tokens: {total_tks}")
+
+        logger.info(f"Binary file temporarily saved to {temp_bin_path}...")
+
+        final_ids = np.memmap(temp_bin_path, dtype=self.dtype)
+        np.save(output_path, final_ids)
+        
+        logger.info(f"Finished. Output saved to {output_path}")
     
     def decode(self, ids: list[int]) -> str:
         """Decode the list of tokens into string"""
         decoded_bytes = b"".join(self.vocab[id] for id in ids)
         return decoded_bytes.decode(encoding="UTF-8", errors="replace")
+    
 
 if __name__ == "__main__":
-    import numpy as np
-    Tiny_Stories_file_path = "data/owt_train.txt"
-    tokenizer_TinyStories = Tokenizer.from_files(
+    
+    tokenizer = Tokenizer.from_files(
         vocab_filepath="vocab_owt_train.txt.json",
         merges_filepath="merges_owt_train.txt.json",
-        use_rust= None
+        use_rust= True
     )
-    _global_tokenizer = tokenizer_TinyStories
-    output_bin_path = "owt_Train.bin"
-    with open(output_bin_path, "wb") as f:
-        pass
 
-    tiny_st_time = time.perf_counter()
-    with ProgressBar() as pbar:
-        task = pbar.add_task(description="Encoding OpenWebText",total= os.path.getsize(Tiny_Stories_file_path))
+    _global_tokenizer = tokenizer
+    dataset = "data/owt_train.txt"
 
-        sample_sum_bytes = []
-        total_tks = 0
-        
-        avg_compression_ratio : float | None = None
-        sample_token_nums = 0
-        update_interval = 1
-        ids_chunks = []
-        accu_chunks = 0
-        last = 0
-        with open(output_bin_path, "ab") as f_out:
-            for chunk_array, chunk_len in tokenizer_TinyStories.encode_from_file(Tiny_Stories_file_path, chunk_size=  64 * 1024 * 1024):
-                # ids_chunks.append(chunk_array)
-                f_out.write(chunk_array.tobytes())
-                accu_chunks += 1
-                total_tks += len(chunk_array)
-
-                if accu_chunks == 1:
-                    logger.info(f"First chunk file processed. Duration is {time.perf_counter() - tiny_st_time: .6f}")
-                    tiny_st_time = time.perf_counter()
-
-                if accu_chunks % update_interval == 0:
-                    sample_sum_bytes.append(chunk_len)
-                    sample_token_nums += len(chunk_array)
-                    avg_compression_ratio = sum(sample_sum_bytes) / sample_token_nums
-                    total_estimate_bytes = avg_compression_ratio * total_tks
-
-                    elapsed_time = time.perf_counter() - tiny_st_time
-                    if elapsed_time > 0:
-                        throughput = (total_estimate_bytes / 1048576) / elapsed_time  # MB/s
-                        pbar.advance(task, total_estimate_bytes - last)
-                        last = total_estimate_bytes
-                        pbar.update(task, description=f"Encoding... [green]{throughput:.4f} MB/s[/green] [red]Compression Ratio {avg_compression_ratio:.4f}[/red]")
-
-    logger.info(f"Finished. Total duration: {time.perf_counter() - tiny_st_time:.6f} s, Total tokens: {total_tks}")
-
-    logger.info(f"Data saved to {output_bin_path}...")
-    
-    logger.info(f"Converting to npy...")
-
-    final_ids = np.fromfile(output_bin_path, dtype=np.uint16)
-    np.save(f"{output_bin_path}.npy", final_ids)
-    
-    logger.info("Finished.")
-
-        
+    tokenizer.encode_file_to(
+        input_path= "data/owt_train.txt",
+        output_path= "output/owt_train_tokens.npy",
+        num_processes= 95,
+        chunk_size= 32 * 1024 * 1024
+    )
