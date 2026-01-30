@@ -13,6 +13,7 @@ from itertools import zip_longest
 
 import numpy as np
 import numpy.typing as npt
+import numpy.lib.format
 
 from collections import defaultdict
 
@@ -197,9 +198,9 @@ _global_tokenizer: Optional["Tokenizer"] = None
 """ Globalize the Tokenizer Instance to avoid serializing effort """
 
 def _encode_worker_wrapper(args):
-    pos, input_path = args
+    idx, pos, input_path = args
     if _global_tokenizer:
-        return _global_tokenizer._encode_inside_file(pos, input_path)
+        return _global_tokenizer._encode_inside_file(pos, input_path, f"temp_{idx}.bin")
     else:
         assert _global_tokenizer is None , "Global Tokenizer not initliazed"
 
@@ -448,14 +449,14 @@ class Tokenizer:
             self,
             pos : tuple[int, int],
             input_path : str | os.PathLike,
-    ) -> tuple[npt.NDArray, int]:
+            output_path: str
+    ) -> tuple[str, int, int]:
         """Encode a part inside a file.
 
         Args:
             pos (tuple[int, int]): `(start, end)` Range to be read and encoding of the file.
             input_path (str | os.PathLike): Path of the file to be encoding.
 
-        Returns:
             tuple[npt.NDArray, int]: 
                 Token ids stored as np.array and Size of the chunk (bytes)
         """
@@ -467,14 +468,16 @@ class Tokenizer:
                 chunk = mm[start:end].decode("utf-8", errors="replace")
                 ids_list = self.encode(chunk)
 
-        return np.array(ids_list, dtype=self.dtype), chunk_len
+        with open(output_path, "wb") as temp_file:
+            temp_file.write(np.array(ids_list, dtype=self.dtype).tobytes())
+            return output_path, len(ids_list), chunk_len
 
     def encode_file_parrellel(
             self,
             file_path: str,
             num_processes: int = (os.cpu_count() or 2) - 1,
             chunk_size: int = 50 * 1024 * 1024 
-        ) -> Iterator[tuple[npt.NDArray, int]]:
+        ) -> Iterator[tuple[str, int, int]]:
         """Parrellely encode a file.
 
         Args:
@@ -483,7 +486,7 @@ class Tokenizer:
             chunk_size (int, optional): Defaults to 32 * 1024 * 1024 bytes (32MiB).
 
         Yields:
-            Iterator[tuple[npt.NDArray, int]]: yield the return value of `_encode_inside_file()`
+            Iterator[tuple[str, int]]: yield the return value of `_encode_inside_file()`
         """
 
         boundaries =[]
@@ -492,8 +495,8 @@ class Tokenizer:
         logger.info(f"Got file boundaries, chunk_size is {chunk_size / 1024 } KiB , {len(boundaries) - 1} chunks in total")
 
         task_args = (
-            (pos, file_path) 
-            for pos in zip(boundaries[:-1], boundaries[1:])
+            (i, pos, file_path) 
+            for i, pos in enumerate(zip(boundaries[:-1], boundaries[1:]))
         )
 
         with multiprocessing.Pool(processes= num_processes) as pool:
@@ -501,8 +504,8 @@ class Tokenizer:
 
             for res in results:
                 if res is not None:
-                    batch_ids, chunk_len = res
-                    yield batch_ids, chunk_len
+                    temp_file_name, token_num, chunk_len = res
+                    yield temp_file_name, token_num, chunk_len
 
     @timer
     def encode_file_to(self,
@@ -517,22 +520,17 @@ class Tokenizer:
             input_path (str): 
             output_path (str): 
             num_processes (int, optional):  Defaults to 8.
-            chunk_size (int, optional): Defaults to 32*1024*1024.
+            chunk_size (int, optional): Defaults to 32 * 1024 * 1024.
         """
 
-        temp_bin_path = f"{output_path}.temp.bin"
-
-        # Create a empty temp file.
-        with open(temp_bin_path, "wb") as f:
-            pass
-
         encode_start_time = time.perf_counter()
+        file_size = os.path.getsize(input_path)
 
         with ProgressBar() as pbar:
 
             task = pbar.add_task(
                 description=f"Encoding `{input_path}`",
-                total= os.path.getsize(input_path)
+                total= file_size
             )
 
             sample_sum_bytes = []
@@ -543,44 +541,75 @@ class Tokenizer:
             update_interval = 1
             accu_chunks = 0
             last = 0
-            with open(temp_bin_path, "ab") as f_out:
-                for chunk_array, chunk_len in self.encode_file_parrellel(
-                            file_path= input_path,
-                            num_processes= num_processes, 
-                            chunk_size=  chunk_size
-                    ):
+            temp_files = []
 
-                    f_out.write(chunk_array.tobytes())
+            for temp_file_name, token_num, chunk_len in self.encode_file_parrellel(
+                        file_path= input_path,
+                        num_processes= num_processes, 
+                        chunk_size=  chunk_size
+                ):
+                temp_files.append(temp_file_name)
 
-                    accu_chunks += 1
-                    total_tks += len(chunk_array)
+                accu_chunks += 1
+                total_tks += token_num
 
-                    if accu_chunks == 1:
-                        logger.info(f"First chunk file processed. Duration is {time.perf_counter() - encode_start_time: .6f}")
-                        encode_start_time = time.perf_counter()
+                if accu_chunks == 1:
+                    logger.info(f"First chunk file processed. Duration is {time.perf_counter() - encode_start_time: .6f}")
 
-                    if accu_chunks % update_interval == 0:
-                        sample_sum_bytes.append(chunk_len)
-                        sample_token_nums += len(chunk_array)
-                        avg_compression_ratio = sum(sample_sum_bytes) / sample_token_nums
-                        total_estimate_bytes = avg_compression_ratio * total_tks
+                if accu_chunks % update_interval == 0:
+                    sample_sum_bytes.append(chunk_len)
+                    sample_token_nums += token_num
+                    avg_compression_ratio = sum(sample_sum_bytes) / sample_token_nums
+                    total_estimate_bytes = avg_compression_ratio * total_tks
 
-                        elapsed_time = time.perf_counter() - encode_start_time
-                        if elapsed_time > 0:
-                            throughput = (total_estimate_bytes / 1048576) / elapsed_time  # MB/s
+                    elapsed_time = time.perf_counter() - encode_start_time
+                    if elapsed_time > 0:
+                        throughput = (total_estimate_bytes / 1048576) / elapsed_time  # MB/s
 
-                            pbar.advance(task, total_estimate_bytes - last)
-                            last = total_estimate_bytes
+                        pbar.advance(task, total_estimate_bytes - last)
+                        last = total_estimate_bytes
 
-                            pbar.update(task, description=f"Encoding... [green]{throughput:.4f} MB/s[/green] [red]Compression Ratio {avg_compression_ratio:.4f}[/red]")
+                        pbar.update(task, description=f"Encoding... [green]{throughput:.4f} MB/s[/green] [red]Compression Ratio {avg_compression_ratio:.4f}[/red]")
 
-        logger.info(f"Finished. Total duration: {time.perf_counter() - encode_start_time:.6f} s, Total tokens: {total_tks}")
+        logger.info(f"Finished. Total duration: {time.perf_counter() - encode_start_time:.6f} s, Total tokens: {total_tks}, Avg. Throughput: {file_size / 1048576 / (time.perf_counter() - encode_start_time):.4f} MB/s")
 
-        logger.info(f"Binary file temporarily saved to {temp_bin_path}...")
+        logger.info(f"Merging Temp files using Zero-Copy...")
 
-        final_ids = np.memmap(temp_bin_path, dtype=self.dtype)
-        np.save(output_path, final_ids)
-        
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        with open(output_path, 'wb') as out_f:
+            header_data = {
+                'descr': numpy.lib.format.dtype_to_descr(numpy.dtype(self.dtype)),
+                'fortran_order': False,
+                'shape': (total_tks,),
+            }
+            
+            numpy.lib.format.write_array_header_1_0(out_f, header_data)
+
+            out_f.flush()
+            
+            out_fd = out_f.fileno()
+
+            total_data_size = sum(os.path.getsize(f) for f in temp_files)
+            
+            with ProgressBar() as pbar:
+                merge_task = pbar.add_task("Merging...", total=len(temp_files))
+                
+                for temp_file in temp_files:
+                    try:
+                        with open(temp_file, 'rb') as in_f:
+                            count = os.fstat(in_f.fileno()).st_size
+                            
+                            os.sendfile(out_fd, in_f.fileno(), 0, count)
+                            
+                    except Exception as e:
+                        logger.error(f"Failed to merge {temp_file}: {e}")
+                        raise e
+                    finally:
+                        if os.path.exists(temp_file):
+                            os.remove(temp_file)
+                        pbar.update(merge_task, advance=1)
+
         logger.info(f"Finished. Output saved to {output_path}")
     
     def decode(self, ids: list[int]) -> str:
@@ -603,6 +632,6 @@ if __name__ == "__main__":
     tokenizer.encode_file_to(
         input_path= "data/owt_train.txt",
         output_path= "output/owt_train_tokens.npy",
-        num_processes= 95,
-        chunk_size= 32 * 1024 * 1024
+        num_processes= os.cpu_count() or 1,
+        chunk_size= 1 * 1024 * 1024
     )

@@ -122,6 +122,9 @@ impl RustBPE {
         result
     }
     fn merge(&self, ids: Vec<u16>) -> Vec<u16> {
+        if ids.len() < 2 {
+            return ids;
+        }
         if ids.len() > 24 {
             return self.merge_heap(ids);
         }
