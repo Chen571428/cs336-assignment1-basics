@@ -1,0 +1,5 @@
+[workspace]
+members = [
+    "cs336_basics/rust_utils"
+]
+resolver = "2"

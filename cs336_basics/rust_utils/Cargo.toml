@@ -1,0 +1,13 @@
+[package]
+name = "rust_utils"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "rust_utils"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.27.2", features = ["extension-module"] }
+rayon = "1.11.0"
+rustc-hash = "2.1.1"

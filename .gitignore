@@ -176,3 +176,4 @@ vocab_TinyStoriesV2-GPT4-train.txt.json
 vocab_TinyStoriesV2-GPT4-valid.txt.json
 *.npy
 nohup.out
+*.bin

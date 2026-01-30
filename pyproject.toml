@@ -21,18 +21,17 @@ dependencies = [
     "ty>=0.0.1a16",
     "rich>=14.2.0",
     "pytest-json-report>=1.5.0",
-    "cppyy>=3.5.0",
-    "cpycppyy>=1.13.0",
-    "cppyy-backend>=1.15.3",
+    "maturin>=1.11.5",
 ]
 
 [build-system]
-requires = ["uv_build>=0.8.3,<0.9.0", "wheel", "cppyy"]
-build-backend = "uv_build"
+requires = ["maturin>=1.11.5" ]
+build-backend = "maturin"
 
-[tool.uv.build-backend]
-module-name = "cs336_basics"
-module-root = ""
+[tool.maturin]
+manifest-path = "cs336_basics/rust_utils/Cargo.toml"
+python-source = "."
+module-name = "cs336_basics.rust_utils"
 
 [tool.uv]
 package = true
