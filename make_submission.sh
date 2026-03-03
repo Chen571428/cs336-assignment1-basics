@@ -10,6 +10,7 @@ rm "$output_file" || true
 
 # Compress all files in the current directory into a single zip file
 zip -r "$output_file" . \
+    -x '*target*' \
     -x '*egg-info*' \
     -x '*mypy_cache*' \
     -x '*pytest_cache*' \
@@ -31,6 +32,7 @@ zip -r "$output_file" . \
     -x '*.pt' \
     -x '*.pth' \
     -x '*.npy' \
-    -x '*.npz'
+    -x '*.npz' \
+    -x '*.bin' 
 
 echo "All files have been compressed into $output_file"

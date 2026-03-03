@@ -21,7 +21,7 @@ from typing import Optional, Self, Iterable, Iterator, Sequence
 
 from cs336_basics.pretokenization import pretokenize, PREPATTERN, BYTES_LOOKUP
 from cs336_basics.utils import get_logger, timer, ProgressBar, find_chunk_boundaries
-from cs336_basics.rust_utils import RustBPE
+from cs336_basics.rust import RustBPE
 
 logger = get_logger(__name__)
 
@@ -633,5 +633,5 @@ if __name__ == "__main__":
         input_path= "data/owt_train.txt",
         output_path= "output/owt_train_tokens.npy",
         num_processes= os.cpu_count() or 1,
-        chunk_size= 1 * 1024 * 1024
+        chunk_size= 8 * 1024 * 1024
     )

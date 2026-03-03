@@ -1,5 +1,5 @@
 [workspace]
 members = [
-    "cs336_basics/rust_utils"
+    "cs336_basics/rust"
 ]
 resolver = "2"

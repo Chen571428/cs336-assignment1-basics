@@ -6,6 +6,8 @@ from functools import wraps
 from tqdm import tqdm
 from rich.text import Text
 from rich.logging import RichHandler
+import rich
+import json
 from rich.progress import (
     Progress,
     SpinnerColumn,
@@ -141,3 +143,140 @@ def find_chunk_boundaries(
 
     # Make sure all boundaries are unique, but might be fewer than desired_num_chunks
     return sorted(set(chunk_boundaries))
+
+def resources_accounting(
+        vocab_size: int,
+        seq_len: int,
+        num_layers: int,
+        d_model: int,
+        num_heads: int,
+        d_ff: int
+) -> None:
+    #Parameters
+    ## Per Layer
+    attn_proj_weights_per_layer =  4 * d_model ** 2
+    ln_weights_per_layer = 2 * d_model
+    ffn_proj_weights_per_layer =  8 * d_model ** 2
+
+    transformer_weights_per_layer = 2 * d_model + 12 * d_model ** 2
+
+    ## Total
+    token_embedding_weights = vocab_size * d_model
+    attn_layers_proj_weights = num_layers * attn_proj_weights_per_layer
+    ln_layers_weights = num_layers * ln_weights_per_layer
+    ffn_layers_proj_weights = num_layers * ffn_proj_weights_per_layer
+
+    transformer_layers_weights = num_layers * transformer_weights_per_layer
+    ln_final_weights = 1 * d_model
+    lm_head_weights = d_model * vocab_size
+
+    total_weights = token_embedding_weights + transformer_layers_weights + ln_final_weights + lm_head_weights
+
+    parameters = {
+        # "attn_proj_weights_per_layer" :  (4 * 2 * seq_len * d_model * d_model),
+        # "ln_weights_per_layer" : 2 * d_model,
+        # "ffn_proj_weights_per_layer" :  8 * d_model ** 2,
+
+        # "transformer_weights_per_layer" : 2 * d_model + 12 * d_model ** 2,
+
+        "token_embedding_weights" : (vocab_size * d_model) / total_weights * 100,
+        "attn_layers_proj_weights" : (num_layers * attn_proj_weights_per_layer) / total_weights * 100,
+        "ln_layers_weights" : (num_layers * ln_weights_per_layer) / total_weights * 100,
+        "ffn_layers_proj_weights" : (num_layers * ffn_proj_weights_per_layer) / total_weights * 100,
+        "lm_head & ln_final": (lm_head_weights + ln_final_weights)  / total_weights * 100 ,
+
+        "transformer_layers_weights" : (num_layers * transformer_weights_per_layer) / total_weights * 100 ,
+        "total_BParameters" : total_weights  / 1000000000
+    }
+    rich.print_json(json.dumps(parameters))
+
+    # Forward Matmuls
+
+    attn_proj_flops_per_layer = 8 * seq_len * d_model**2
+    attn_MHA_flops_per_layer =  4 * seq_len ** 2 * d_model
+    ffn_proj_flops_per_layer = 16 * seq_len * d_model**2
+
+    attn_proj_flops = num_layers * attn_proj_flops_per_layer
+    attn_MHA_flops = num_layers * attn_MHA_flops_per_layer 
+    ffn_proj_flops = num_layers * ffn_proj_flops_per_layer 
+    lm_head_flops = 2 * seq_len * d_model * vocab_size
+
+    total_flops = attn_proj_flops + attn_MHA_flops + ffn_proj_flops + lm_head_flops
+
+    forward_matmul_flops = {
+        # "attn_proj_flops_per_layer" : 8 * seq_len * d_model**2 ,
+        # "attn_MHA_flops_per_layer" :  4 * seq_len ** 2 * d_model ,
+        # "ffn_proj_flops_per_layer" : 16 * seq_len * d_model**2 ,
+        "attn_proj_flops" : (num_layers * attn_proj_flops_per_layer) / total_flops * 100 ,
+        "attn_MHA_flops" : (num_layers * attn_MHA_flops_per_layer) / total_flops * 100  ,
+        "ffn_proj_flops" : (num_layers * ffn_proj_flops_per_layer) / total_flops * 100  ,
+        "lm_head_flops" : (2 * seq_len * d_model * vocab_size) / total_flops * 100 ,
+        "total_TFLOPS": total_flops / 1000000000000
+    }
+   
+    rich.print_json(json.dumps(forward_matmul_flops))
+    
+
+
+def cmp_resources() -> None:
+    # GPT-2-small (12layers,768d_model,12heads)
+    # GPT-2-medium (24layers,1024d_model,16heads)
+    # GPT-2-large (36layers,1280d_model,20heads)
+   
+    rich.print("GPT-2-SMALL")
+    GPT_2_small = {
+        "vocab_size" : 50257,
+        "seq_len" : 1024,
+        "num_layers" : 12,
+        "d_model" : 768,
+        "num_heads" : 12,
+        "d_ff" : 4 * 768
+    }
+    resources_accounting(**GPT_2_small)
+
+    rich.print("GPT-2-MEDIUM")
+    GPT_2_medium = {
+        "vocab_size" : 50257,
+        "seq_len" : 1024,
+        "num_layers" : 24,
+        "d_model" : 1024,
+        "num_heads" : 16,
+        "d_ff" : 4 * 1024
+    }
+    resources_accounting(**GPT_2_medium)
+
+    rich.print("GPT-2-LARGE")
+    GPT_2_large = {
+        "vocab_size" : 50257,
+        "seq_len" : 1024,
+        "num_layers" : 36,
+        "d_model" : 1280,
+        "num_heads" : 20,
+        "d_ff" : 4 * 1280
+    }
+    resources_accounting(**GPT_2_large)
+
+    rich.print("GPT-2-XL")
+    GPT_2_xl = {
+        "vocab_size" : 50257,
+        "seq_len" : 1024,
+        "num_layers" : 48,
+        "d_model" : 1600,
+        "num_heads" : 25,
+        "d_ff" : 4 * 1600
+    }
+    resources_accounting(**GPT_2_xl)
+
+    rich.print("GPT-2-XL-16384L")
+    GPT_2_xl_16384l = {
+        "vocab_size" : 50257,
+        "seq_len" : 16384,
+        "num_layers" : 48,
+        "d_model" : 1600,
+        "num_heads" : 25,
+        "d_ff" : 4 * 1600
+    }
+    resources_accounting(**GPT_2_xl_16384l)
+
+if __name__ == "__main__":
+    cmp_resources()

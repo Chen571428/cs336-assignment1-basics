@@ -14,14 +14,15 @@ dependencies = [
     "regex>=2024.11.6", # more powerful regex than the builtin `re` module
     "submitit>=1.5.2", # job submission for SLURM
     "tiktoken>=0.9.0",
-    "torch~=2.6.0; sys_platform != 'darwin' or platform_machine != 'x86_64'",
-    "torch~=2.2.2; sys_platform == 'darwin' and platform_machine == 'x86_64'", # Intel Macs
+    "torch~=2.10.0",
     "tqdm>=4.67.1",
     "wandb>=0.19.7",
     "ty>=0.0.1a16",
     "rich>=14.2.0",
     "pytest-json-report>=1.5.0",
     "maturin>=1.11.5",
+    "matplotlib>=3.10.8",
+    "seaborn>=0.13.2",
 ]
 
 [build-system]
@@ -29,9 +30,9 @@ requires = ["maturin>=1.11.5" ]
 build-backend = "maturin"
 
 [tool.maturin]
-manifest-path = "cs336_basics/rust_utils/Cargo.toml"
+manifest-path = "cs336_basics/rust/Cargo.toml"
 python-source = "."
-module-name = "cs336_basics.rust_utils"
+module-name = "cs336_basics.rust"
 
 [tool.uv]
 package = true
