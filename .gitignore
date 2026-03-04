@@ -177,3 +177,4 @@ vocab_TinyStoriesV2-GPT4-valid.txt.json
 *.npy
 nohup.out
 *.bin
+tokenizer/*

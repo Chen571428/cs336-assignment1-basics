@@ -43,6 +43,14 @@ log_cli = true
 log_cli_level = "WARNING"
 addopts = "-s"
 
+[tool.uv.sources]
+torch = { index = "pytorch" }
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
 [tool.ruff]
 line-length = 120
 

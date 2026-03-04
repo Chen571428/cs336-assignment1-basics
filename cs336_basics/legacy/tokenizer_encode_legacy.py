@@ -1,11 +1,11 @@
 import os
 import json
-from cs336_basics.pretokenization import pretokenize, PREPATTERN, BYTES_LOOKUP
+from cs336_basics.tokenizers.pretokenization import pretokenize, PREPATTERN, BYTES_LOOKUP
 from collections import Counter, defaultdict
 from rich.progress import track
 from typing import Optional, Self, Iterable, Iterator
 import heapq
-from cs336_basics.utils import get_logger, timer, ProgressBar
+from cs336_basics.utils.utils import get_logger, timer, ProgressBar
 import time
 import regex as re
 from itertools import zip_longest

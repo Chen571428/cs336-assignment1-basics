@@ -19,8 +19,8 @@ from collections import defaultdict
 
 from typing import Optional, Self, Iterable, Iterator, Sequence
 
-from cs336_basics.pretokenization import pretokenize, PREPATTERN, BYTES_LOOKUP
-from cs336_basics.utils import get_logger, timer, ProgressBar, find_chunk_boundaries
+from cs336_basics.tokenizers.pretokenization import pretokenize, PREPATTERN, BYTES_LOOKUP
+from cs336_basics.utils.utils import get_logger, timer, ProgressBar, find_chunk_boundaries
 from cs336_basics.rust import RustBPE
 
 logger = get_logger(__name__)
@@ -619,19 +619,105 @@ class Tokenizer:
     
 
 if __name__ == "__main__":
-    
+    owt_t_vocab, owt_t_merges = train_bpe(
+        input_path="/data/share/hw1-data/owt_train.txt",
+        vocab_size=32000,
+    )
+    with open("tokenizer/owt_t_vocab.json", "w") as f:
+        json.dump(owt_t_vocab, f, ensure_ascii=False, default=lambda x: x.decode('latin-1') if isinstance(x, bytes) else x)
+    with open("tokenizer/owt_t_merges.json", "w") as f:
+        json.dump(owt_t_merges, f, ensure_ascii=False, default=lambda x: x.decode('latin-1') if isinstance(x, bytes) else x)
+
+    owt_v_vocab, owt_v_merges = train_bpe(
+        input_path="/data/share/hw1-data/owt_valid.txt",
+        vocab_size=32000,
+    )
+    with open("tokenizer/owt_v_vocab.json", "w") as f:
+        json.dump(owt_v_vocab, f, ensure_ascii=False, default=lambda x: x.decode('latin-1') if isinstance(x, bytes) else x)
+    with open("tokenizer/owt_v_merges.json", "w") as f:
+        json.dump(owt_v_merges, f, ensure_ascii=False, default=lambda x: x.decode('latin-1') if isinstance(x, bytes) else x)
+
+
+
+    tiny_t_vocab, tiny_t_merges = train_bpe(
+        input_path="/data/share/hw1-data/TinyStoriesV2-GPT4-train.txt",
+        vocab_size=10000,
+    )
+    with open("tokenizer/tiny_t_vocab.json", "w") as f:
+        json.dump(tiny_t_vocab, f, ensure_ascii=False, default=lambda x: x.decode('latin-1') if isinstance(x, bytes) else x)
+    with open("tokenizer/tiny_t_merges.json", "w") as f:
+        json.dump(tiny_t_merges, f, ensure_ascii=False, default=lambda x: x.decode('latin-1') if isinstance(x, bytes) else x)
+
+    tiny_v_vocab, tiny_v_merges = train_bpe(
+        input_path="/data/share/hw1-data/TinyStoriesV2-GPT4-valid.txt",
+        vocab_size=10000,
+    )
+    with open("tokenizer/tiny_v_vocab.json", "w") as f:
+        json.dump(tiny_v_vocab, f, ensure_ascii=False, default=lambda x: x.decode('latin-1') if isinstance(x, bytes) else x)
+    with open("tokenizer/tiny_v_merges.json", "w") as f:
+        json.dump(tiny_v_merges, f, ensure_ascii=False, default=lambda x: x.decode('latin-1') if isinstance(x, bytes) else x)
+
+
     tokenizer = Tokenizer.from_files(
-        vocab_filepath="vocab_owt_train.txt.json",
-        merges_filepath="merges_owt_train.txt.json",
+        vocab_filepath="tokenizer/owt_t_vocab.json",
+        merges_filepath="tokenizer/owt_t_merges.json",
+        use_rust= True
+    )
+    _global_tokenizer = tokenizer
+    dataset = "/data/share/hw1-data/owt_train.txt"
+
+    tokenizer.encode_file_to(
+        input_path= "/data/share/hw1-data/owt_train.txt",
+        output_path= "tokenized_dataset/owt_train_tokens.npy",
+        num_processes= os.cpu_count() or 1,
+        chunk_size= 8 * 1024 * 1024
+    )
+
+    tokenizer = Tokenizer.from_files(
+        vocab_filepath="tokenizer/owt_v_vocab.json",
+        merges_filepath="tokenizer/owt_v_merges.json",
         use_rust= True
     )
 
     _global_tokenizer = tokenizer
-    dataset = "data/owt_train.txt"
+    dataset = "/data/share/hw1-data/owt_valid.txt"
 
     tokenizer.encode_file_to(
-        input_path= "data/owt_train.txt",
-        output_path= "output/owt_train_tokens.npy",
+        input_path= "/data/share/hw1-data/owt_valid.txt",
+        output_path= "tokenized_dataset/owt_valid_tokens.npy",
+        num_processes= os.cpu_count() or 1,
+        chunk_size= 8 * 1024 * 1024
+    )
+
+    
+
+    tokenizer = Tokenizer.from_files(
+        vocab_filepath="tokenizer/tiny_v_vocab.json",
+        merges_filepath="tokenizer/tiny_v_merges.json",
+        use_rust= True
+    )
+
+    _global_tokenizer = tokenizer
+    dataset = "/data/share/hw1-data/TinyStoriesV2-GPT4-valid.txt"
+
+    tokenizer.encode_file_to(
+        input_path= "/data/share/hw1-data/TinyStoriesV2-GPT4-valid.txt",
+        output_path= "tokenized_dataset/tiny_valid_tokens.npy",
+        num_processes= os.cpu_count() or 1,
+        chunk_size= 8 * 1024 * 1024
+    )
+    tokenizer = Tokenizer.from_files(
+        vocab_filepath="tokenizer/tiny_t_vocab.json",
+        merges_filepath="tokenizer/tiny_t_merges.json",
+        use_rust= True
+    )
+
+    _global_tokenizer = tokenizer
+    dataset = "/data/share/hw1-data/TinyStoriesV2-GPT4-train.txt"
+
+    tokenizer.encode_file_to(
+        input_path= "/data/share/hw1-data/TinyStoriesV2-GPT4-train.txt",
+        output_path= "tokenized_dataset/tiny_train_tokens.npy",
         num_processes= os.cpu_count() or 1,
         chunk_size= 8 * 1024 * 1024
     )

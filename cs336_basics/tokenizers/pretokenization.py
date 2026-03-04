@@ -8,7 +8,7 @@ import regex as re
 import tqdm
 from tqdm import tqdm
 import time
-from cs336_basics.utils import get_logger, timer, find_chunk_boundaries
+from cs336_basics.utils.utils import get_logger, timer, find_chunk_boundaries
 from rich.progress import track
 
 logger = get_logger(__name__)

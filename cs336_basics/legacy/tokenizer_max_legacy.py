@@ -1,6 +1,6 @@
 import os
 import json
-from cs336_basics.pretokenization import pretokenize
+from cs336_basics.tokenizers.pretokenization import pretokenize
 from collections import Counter, defaultdict
 from rich.progress import (
     Progress,
@@ -13,7 +13,7 @@ from rich.progress import (
 )
 from typing import Optional, Self, Iterable, Iterator
 import heapq
-from cs336_basics.utils import get_logger, timer, ProgressBar
+from cs336_basics.utils.utils import get_logger, timer, ProgressBar
 import time
 
 logger = get_logger(__name__)

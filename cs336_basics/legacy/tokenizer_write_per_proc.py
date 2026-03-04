@@ -1,11 +1,11 @@
 import os
 import json
-from cs336_basics.pretokenization import pretokenize, PREPATTERN, BYTES_LOOKUP
+from cs336_basics.tokenizers.pretokenization import pretokenize, PREPATTERN, BYTES_LOOKUP
 from collections import Counter, defaultdict
 from rich.progress import track
 from typing import Optional, Self, Iterable, Iterator, Sequence, BinaryIO
 import heapq
-from cs336_basics.utils import get_logger, timer, ProgressBar, find_chunk_boundaries
+from cs336_basics.utils.utils import get_logger, timer, ProgressBar, find_chunk_boundaries
 from cs336_basics.rust_utils import RustBPE
 import time
 import regex as re

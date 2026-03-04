@@ -119,6 +119,8 @@ class AdamW(torch.optim.Optimizer):
             weight_decay = group["weight_decay"]
             
             for p in group["params"]:
+                if p.grad is None: 
+                    continue
                 state = self.state[p]
                 t = state.get("t", 1)
                 m = state.get("m", 0)
@@ -168,3 +170,4 @@ if __name__  == "__main__":
     p.set_ylim(0,30)
 
     plt.savefig("test_SGDw.svg")
+
