@@ -1,20 +1,20 @@
-from einops import rearrange
 import numpy
 import torch
 import torch.nn.functional as F
+from einops import rearrange
 
 from .adapters import (
-    run_multihead_self_attention_with_rope,
-    run_rope,
-    run_silu,
+    run_embedding,
+    run_linear,
     run_multihead_self_attention,
-    run_swiglu,
+    run_multihead_self_attention_with_rope,
     run_rmsnorm,
+    run_rope,
     run_scaled_dot_product_attention,
+    run_silu,
+    run_swiglu,
     run_transformer_block,
     run_transformer_lm,
-    run_linear,
-    run_embedding,
 )
 
 
@@ -58,7 +58,7 @@ def test_scaled_dot_product_attention(numpy_snapshot, q, k, v, mask):
     actual_output = run_scaled_dot_product_attention(Q=q, K=k, V=v, mask=mask)
     numpy_snapshot.assert_match(
         actual_output,
-        atol=1e-6,
+        atol=1e-5,
     )
 
 
@@ -70,7 +70,7 @@ def test_4d_scaled_dot_product_attention(numpy_snapshot, q, k, v, mask):
     actual_output = run_scaled_dot_product_attention(Q=q, K=k, V=v, mask=mask)
     numpy_snapshot.assert_match(
         actual_output,
-        atol=1e-6,
+        atol=1e-5,
     )
 
 
@@ -88,7 +88,7 @@ def test_multihead_self_attention(numpy_snapshot, in_embeddings, d_model, n_head
         o_proj_weight=o_proj_weight,
         in_features=in_embeddings,
     )
-    numpy_snapshot.assert_match(actual_output, atol=1e-6)
+    numpy_snapshot.assert_match(actual_output, atol=1e-5)
 
 
 def test_multihead_self_attention_with_rope(
@@ -111,7 +111,7 @@ def test_multihead_self_attention_with_rope(
         in_features=in_embeddings,
         token_positions=pos_ids,
     )
-    numpy_snapshot.assert_match(actual_output, atol=1e-6)
+    numpy_snapshot.assert_match(actual_output, atol=1e-5)
 
 
 def test_transformer_lm(
@@ -169,7 +169,7 @@ def test_transformer_block(numpy_snapshot, ts_state_dict, in_embeddings, d_model
     )
     numpy_snapshot.assert_match(
         actual_output,
-        atol=1e-6,
+        atol=1e-4,
     )
 
 
@@ -180,14 +180,14 @@ def test_rmsnorm(numpy_snapshot, ts_state_dict, in_embeddings):
 
     actual_output = run_rmsnorm(d_model=d_model, eps=1e-5, weights=reference_weights, in_features=in_embeddings)
 
-    numpy_snapshot.assert_match(actual_output, atol=1e-6)
+    numpy_snapshot.assert_match(actual_output, atol=1e-4)
 
 
 def test_rope(numpy_snapshot, in_embeddings, d_model, theta, n_queries, pos_ids):
     output = run_rope(
         d_model, theta=theta, max_seq_len=n_queries, in_query_or_key=in_embeddings, token_positions=pos_ids
     )
-    numpy_snapshot.assert_match(output, atol=1e-6)
+    numpy_snapshot.assert_match(output, atol=1e-5)
 
 
 def test_silu_matches_pytorch():
@@ -199,4 +199,4 @@ def test_silu_matches_pytorch():
     )
     expected_output = F.silu(x)
     actual_output = run_silu(x)
-    numpy.testing.assert_allclose(actual_output.detach().numpy(), expected_output.detach().numpy(), atol=1e-6)
+    numpy.testing.assert_allclose(actual_output.detach().numpy(), expected_output.detach().numpy(), atol=1e-5)

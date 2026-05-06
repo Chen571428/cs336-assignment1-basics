@@ -1,27 +1,24 @@
-from typing import TypeVar
+import os
+import pickle
+from pathlib import Path
+
 import numpy as np
 import pytest
-import os
-from pathlib import Path
 import torch
 from torch import Tensor
-import pickle
 
 
 class DEFAULT:
     pass
 
 
-_A = TypeVar("_A", np.ndarray, Tensor)
-
-
-def _canonicalize_array(arr: _A) -> np.ndarray:
+def _canonicalize_array[A: (np.ndarray, Tensor)](arr: A) -> np.ndarray:
     if isinstance(arr, Tensor):
         arr = arr.detach().cpu().numpy()
     return arr
 
 
-class NumpySnapshot:
+class NumpySnapshot[A: (np.ndarray, Tensor)]:
     """Snapshot testing utility for NumPy arrays using .npz format."""
 
     def __init__(
@@ -43,7 +40,7 @@ class NumpySnapshot:
 
     def assert_match(
         self,
-        actual: _A | dict[str, _A],
+        actual: A | dict[str, A],
         rtol: float = 1e-4,
         atol: float = 1e-2,
         test_name: str | type[DEFAULT] = DEFAULT,
@@ -95,7 +92,7 @@ class NumpySnapshot:
             )
 
 
-class Snapshot:
+class Snapshot[A: (np.ndarray, Tensor)]:
     def __init__(
         self,
         snapshot_dir: str = "tests/_snapshots",
@@ -115,7 +112,7 @@ class Snapshot:
 
     def assert_match(
         self,
-        actual: _A | dict[str, _A],
+        actual: A | dict[str, A],
         test_name: str | type[DEFAULT] = DEFAULT,
         force_update: bool | type[DEFAULT] = DEFAULT,
     ):
@@ -193,8 +190,9 @@ def numpy_snapshot(request):
 
 @pytest.fixture
 def ts_state_dict(request):
-    from .common import FIXTURES_PATH
     import json
+
+    from .common import FIXTURES_PATH
 
     state_dict = torch.load(FIXTURES_PATH / "ts_tests" / "model.pt", map_location="cpu")
     config = json.load(open(FIXTURES_PATH / "ts_tests" / "model_config.json"))
@@ -325,7 +323,7 @@ def pos_ids(n_queries):
 #         results,
 #         "my_special_test",
 #         rtol=1e-4,
-#         atol=1e-6,
+#         atol=1e-5,
 #     )
 
 # def test_state_dict(ts_state_dict):

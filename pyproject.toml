@@ -1,23 +1,24 @@
 [project]
 name = "cs336_basics"
-version = "1.0.6"
+version = "26.0.0"
 description = "CS336 Assignment 1"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "einops>=0.8.1", # tensor operations
-    "einx>=0.3.0", # more general tensor operations
-    "jaxtyping>=0.3.0", # type hints for pytorch/jax/numpy
-    "numpy",
-    "psutil>=6.1.1",
-    "pytest>=8.3.4",
-    "regex>=2024.11.6", # more powerful regex than the builtin `re` module
-    "submitit>=1.5.2", # job submission for SLURM
-    "tiktoken>=0.9.0",
-    "torch~=2.10.0",
+    "einx>=0.4", # more general tensor operations
+    "jaxtyping>=0.3", # type hints for pytorch/jax/numpy
+    "numpy>=2.4",
+    "psutil>=7",
+    "pytest>=9.0",
+    "pytest-timeout",
+    "regex>=2026.3.32", # more powerful regex than the builtin `re` module
+    "tiktoken>=0.12.0",
+    "torch~=2.11.0", 
     "tqdm>=4.67.1",
-    "wandb>=0.19.7",
-    "ty>=0.0.1a16",
+    "wandb>=0.25",
+    "ty>=0.0.26",
+    "ruff >= 0.15.8", 
     "rich>=14.2.0",
     "pytest-json-report>=1.5.0",
     "maturin>=1.11.5",
@@ -60,6 +61,4 @@ line-length = 120
 
 [tool.ruff.lint]
 extend-select = ["UP"]
-ignore = [
-    "F722"
-]
+ignore = ["F722"]
